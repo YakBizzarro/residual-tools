@@ -47,8 +47,12 @@ const unsigned int cffoldCOMPTYPE_MASK		= (0x000f);
 const unsigned int cffoldCOMPTYPE_NONE		= (0x0000);
 const unsigned int cffoldCOMPTYPE_MSZIP		= (0x0001);
 
+/* CAB data blocks are <= 32768 bytes in uncompressed form. Uncompressed
+ * blocks have zero growth. MSZIP guarantees that it won't grow above
+ * uncompressed size by more than 12 bytes.
+ */
 #define CAB_BLOCKMAX (32768)
-#define CAB_INPUTMAX (CAB_BLOCKMAX+6144)
+#define CAB_INPUTMAX (CAB_BLOCKMAX + 12)
 
 #define MSPACK_ERR_OK          (0)
 #define MSPACK_ERR_ARGS        (1)

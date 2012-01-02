@@ -447,8 +447,6 @@ int mscabd_decompress_state::zlibDecompress(off_t offset, off_t length) {
 	off_t inBlockStart, inBlockEnd;
 	unsigned char hdr[cfdata_SIZEOF];
 	unsigned int cksum;
-	const int PARAM_FIXMSZIP = 0;
-	int ignore_cksum = PARAM_FIXMSZIP && ((_comp_type & cffoldCOMPTYPE_MASK) == cffoldCOMPTYPE_MSZIP);
 
 	Bytef * ret_tmp = (Bytef *)_fileBuf;
 
@@ -477,21 +475,22 @@ int mscabd_decompress_state::zlibDecompress(off_t offset, off_t length) {
 			return MSPACK_ERR_READ;
 		}
 
+		//Perform checksum test on the block (if one is stored)
 		if ((cksum = READ_LE_UINT32(&hdr[cfdata_CheckSum]))) {
 			unsigned int sum2 = cabd_checksum(compressedBlock, (unsigned int) compressedLen, 0);
 			if (cabd_checksum(&hdr[4], 4, sum2) != cksum) {
-				if (!ignore_cksum) return MSPACK_ERR_CHECKSUM;
 				fprintf(stderr, "WARNING; bad block checksum found\n");
+				return MSPACK_ERR_CHECKSUM;
 			}
 		}
 
 		//Check the CK header
-		assert(compressedBlock[0] == 'C');
-		assert(compressedBlock[1] == 'K');
+		if (compressedBlock[0] != 'C' && compressedBlock[1] == 'K')
+			return MSPACK_ERR_READ;
 
 		_zStream.avail_in = compressedLen - 2;
 		_zStream.next_in = compressedBlock + 2;
-		_zStream.avail_out += uncompressedLen;
+		_zStream.avail_out = CAB_INPUTMAX;
 		_zStream.next_out = decompressedBlock;
 
 		success = inflate(&_zStream, Z_SYNC_FLUSH);
