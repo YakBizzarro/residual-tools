@@ -33,21 +33,11 @@
 #include <cassert>
 #include <zlib.h>
 #include "common/scummsys.h"
+#include "common/endian.h"
 #include "tools/patchex/cab.h"
 #include "tools/patchex/packfile.h"
 
-// Some useful type and function
-//typedef unsigned char byte;
-
 static unsigned int cabd_checksum(unsigned char *data, unsigned int bytes, unsigned int cksum);
-
-#define __egi32(a,n) (  ((((unsigned char *) a)[n+3]) << 24) | \
-((((unsigned char *) a)[n+2]) << 16) | \
-((((unsigned char *) a)[n+1]) <<  8) | \
-((((unsigned char *) a)[n+0])))
-
-#define EndGetI32(a) __egi32(a,0)
-#define EndGetI16(a) ((((a)[1])<<8)|((a)[0]))
 
 mscab_decompressor::mscab_decompressor() {
 	d		= NULL;
@@ -59,13 +49,10 @@ mscab_decompressor::~mscab_decompressor() {
 	close();
 }
 
-void mscab_decompressor::open(std::string filename)
-{
-	struct PackFile *fh;
-
+void mscab_decompressor::open(std::string filename) {
 	if (_cab)
 		close();
-	
+
 	_cab = new mscabd_cabinet(filename);
 	error = _cab->read_headers((off_t) 0, 0);
 	if (error) {
@@ -75,16 +62,14 @@ void mscab_decompressor::open(std::string filename)
 	} 
 }
 
-void mscab_decompressor::close()
-{
+void mscab_decompressor::close() {
 	struct mscabd_folder_data *dat, *ndat;
-	struct mscabd_cabinet *cab, *ncab;
+	struct mscabd_cabinet *cab;
 	struct mscabd_folder *fol, *nfol;
 	struct mscabd_file *fi, *nfi;
-	struct mspack_system *sys;
-	
+
 	error = MSPACK_ERR_OK;
-	
+
 	while (_cab) {
 		/* free files */
 		for (fi = _cab->_files; fi; fi = nfi) {
@@ -109,18 +94,7 @@ void mscab_decompressor::close()
 			}
 			delete fol;
 		}
-		
-		for (cab = _cab; cab; cab = ncab) {
-			ncab = cab->_prevcab;
-			if (cab != _cab) 
-				delete cab;
-		}
-		
-		for (cab = _cab->_nextcab; cab; cab = ncab) {
-			ncab = cab->_nextcab;
-			delete cab;
-		}
-		
+
 		cab = _cab->_next;
 		delete _cab;
 		
@@ -138,8 +112,7 @@ mscabd_cabinet::~mscabd_cabinet() {
 		delete _fh;
 }
 
-int mscabd_cabinet::read_headers(off_t offset, int quiet)
-{
+int mscabd_cabinet::read_headers(off_t offset, int quiet) {
 	const int CFHEAD_Signature = 0x00;
 	const int CFHEAD_CabinetSize = 0x08;
 	const int CFHEAD_FileOffset = 0x10;
@@ -156,7 +129,7 @@ int mscabd_cabinet::read_headers(off_t offset, int quiet)
 	const int CFFOLD_DataOffset = 0x00;
 	const int CFFOLD_SIZEOF = 0x08;
 	
-	int num_folders, num_files, folder_resv, i, x;
+	int num_folders, num_files, i;
 	struct mscabd_folder *fol, *linkfol = NULL;
 	struct mscabd_file *file, *linkfile = NULL;
 	unsigned char buf[64];
@@ -165,10 +138,7 @@ int mscabd_cabinet::read_headers(off_t offset, int quiet)
 	this->_next     = NULL;
 	this->_files    = NULL;
 	this->_folders  = NULL;
-	this->_prevcab  = this->_nextcab  = NULL;
-	this->_prevname = this->_nextname = "";
-	this->_previnfo = this->_nextinfo = "";
-	
+
 	this->_base_offset = offset;
 	
 	if (_fh->seek(offset, PackFile::SEEKMODE_START)) {	
@@ -181,24 +151,24 @@ int mscabd_cabinet::read_headers(off_t offset, int quiet)
 	}
 	
 	// Verify Head-signature
-	if (EndGetI32(&buf[CFHEAD_Signature]) != 0x4643534D) {
+	if (READ_BE_UINT32(&buf[CFHEAD_Signature]) != MKTAG('M','S','C','F')) {
 		return MSPACK_ERR_SIGNATURE;
 	}
 	
 	// Fill in cabinet-size
-	this->_length    = EndGetI32(&buf[CFHEAD_CabinetSize]);
-	this->_set_id    = EndGetI16(&buf[CFHEAD_SetID]);
-	this->_set_index = EndGetI16(&buf[CFHEAD_CabinetIndex]);
+	this->_length    = READ_LE_UINT32(&buf[CFHEAD_CabinetSize]);
+	this->_set_id    = READ_LE_UINT16(&buf[CFHEAD_SetID]);
+	this->_set_index = READ_LE_UINT16(&buf[CFHEAD_CabinetIndex]);
 	
 	// Get num folders (should be >0)
-	num_folders = EndGetI16(&buf[CFHEAD_NumFolders]);
+	num_folders = READ_LE_UINT16(&buf[CFHEAD_NumFolders]);
 	if (num_folders == 0) {
 		if (!quiet) fprintf(stderr, "no folders in cabinet.");
 		return MSPACK_ERR_DATAFORMAT;
 	}
 	
 	// Get num files (should be >0)
-	num_files = EndGetI16(&buf[CFHEAD_NumFiles]);
+	num_files = READ_LE_UINT16(&buf[CFHEAD_NumFiles]);
 	if (num_files == 0) {
 		if (!quiet) fprintf(stderr, "no files in cabinet.");
 		return MSPACK_ERR_DATAFORMAT;
@@ -208,59 +178,24 @@ int mscabd_cabinet::read_headers(off_t offset, int quiet)
 	if ((buf[CFHEAD_MajorVersion] != 1) && (buf[CFHEAD_MinorVersion] != 3)) {
 		if (!quiet) fprintf(stderr, "WARNING; cabinet version is not 1.3");
 	}
-	
-	this->_flags = EndGetI16(&buf[CFHEAD_Flags]);
-	if (this->_flags & cfheadRESERVE_PRESENT) {
-		if (_fh->read(&buf[0], cfheadext_SIZEOF) != cfheadext_SIZEOF) {
-			return MSPACK_ERR_READ;
-		}
-		this->_header_resv = EndGetI16(&buf[cfheadext_HeaderReserved]);
-		folder_resv           = buf[cfheadext_FolderReserved];
-		this->_block_resv       = buf[cfheadext_DataReserved];
-		
-		if (this->_header_resv > 60000) {
-			if (!quiet) fprintf(stderr, "WARNING; reserved header > 60000.");
-		}
-		
-		if (this->_header_resv) {
-			if (_fh->seek((off_t) this->_header_resv, PackFile::SEEKMODE_CUR)) {
-				return MSPACK_ERR_SEEK;
-			}
-		}
+
+	if (READ_LE_UINT16(&buf[CFHEAD_Flags]) != 0) {
+		fprintf(stderr, "Reserved fields and multiple cabinets are unsupported");
+		return MSPACK_ERR_DATAFORMAT;
 	}
-	else {
-		this->_header_resv = 0;
-		folder_resv        = 0; 
-		this->_block_resv  = 0;
-	}
-	
-	// Fill in linked list-pointers
-	if (this->_flags & cfheadPREV_CABINET) {
-		this->_prevname = _fh->read_string(&x); if (x) return x;
-		this->_previnfo = _fh->read_string(&x); if (x) return x;
-	}
-	
-	if (this->_flags & cfheadNEXT_CABINET) {
-		this->_nextname = _fh->read_string(&x); if (x) return x;
-		this->_nextinfo = _fh->read_string(&x); if (x) return x;
-	}
+
 	// Read in folders
 	for (i = 0; i < num_folders; i++) {
 		if (_fh->read(&buf[0], CFFOLD_SIZEOF) != CFFOLD_SIZEOF) {
 			return MSPACK_ERR_READ;
 		}
-		if (folder_resv) {
-			if (_fh->seek((off_t) folder_resv, PackFile::SEEKMODE_CUR)) {
-				return MSPACK_ERR_SEEK;
-			}
-		}
-		
+
 		if (!(fol = new mscabd_folder(buf))) {
 			return MSPACK_ERR_NOMEMORY;
 		}
 
 		fol->_data.cab        = (struct mscabd_cabinet *) this;
-		fol->_data.offset     = offset + (off_t) ( (unsigned int) EndGetI32(&buf[CFFOLD_DataOffset]) );
+		fol->_data.offset     = offset + (off_t) ( (unsigned int) READ_LE_UINT32(&buf[CFFOLD_DataOffset]) );
 		
 		if (!linkfol) this->_folders = (struct mscabd_folder *) fol;
 		else linkfol->_next = (struct mscabd_folder *) fol;
@@ -289,11 +224,9 @@ mscabd_file::mscabd_file(PackFile * fh, mscabd_cabinet *cab) {
 	const int cffile_Time             = (0x0C);
 	const int cffile_Attribs          = (0x0E);
 	const int cffile_SIZEOF           = (0x10);
-	
-	const int CFFILE_Continued_from_prev = 0xFFFD;
-	const int CFFILE_Continued_to_next = 0xFFFE;
-	const int CFFILE_Continued_prev_and_next = 0xFFFF;
-	
+
+	const int CFFILE_Continued = 0xFFFD;
+
 	unsigned char buf[64];
 	int x;
 	struct mscabd_folder *fol;
@@ -303,49 +236,35 @@ mscabd_file::mscabd_file(PackFile * fh, mscabd_cabinet *cab) {
 	}
 	
 	_next     = NULL;
-	_length   = EndGetI32(&buf[cffile_UncompressedSize]);
-	_attribs  = EndGetI16(&buf[cffile_Attribs]);
-	_offset   = EndGetI32(&buf[cffile_FolderOffset]);
-	
-	x = EndGetI16(&buf[cffile_FolderIndex]);
-	if (x < CFFILE_Continued_from_prev) {
+	_length   = READ_LE_UINT32(&buf[cffile_UncompressedSize]);
+	_attribs  = READ_LE_UINT16(&buf[cffile_Attribs]);
+	_offset   = READ_LE_UINT32(&buf[cffile_FolderOffset]);
+
+	//Check if the whole file is contained in this cabinet
+	//There is no support for multi-cabinet files.
+	x = READ_LE_UINT16(&buf[cffile_FolderIndex]);
+	if (x < CFFILE_Continued) {
 		struct mscabd_folder *ifol = cab->_folders; 
-		while (x--) if (ifol) ifol = ifol->_next;
+		while (x--)
+			if (ifol) ifol = ifol->_next;
 		_folder = ifol;
-		
+
 		assert(ifol);
 		if (!ifol) {
 			//delete file;
 			//return MSPACK_ERR_DATAFORMAT;
 		}
 	}
-	else {
-		if ((x == CFFILE_Continued_to_next) ||
-			(x == CFFILE_Continued_prev_and_next))
-		{
-			struct mscabd_folder *ifol = cab->_folders;
-			while (ifol->_next) ifol = ifol->_next;
-			_folder = ifol;
-			
-			fol = (struct mscabd_folder *) ifol;
-			if (!fol->_merge_next) fol->_merge_next = this;
-		}
-		
-		if ((x == CFFILE_Continued_from_prev) ||
-			(x == CFFILE_Continued_prev_and_next))
-		{
-			_folder = cab->_folders;
-			
-			fol = (struct mscabd_folder *) _folder;
-			if (!fol->_merge_prev) fol->_merge_prev = this;
-		}
-	}
-	x = EndGetI16(&buf[cffile_Time]);
+	else
+		//TODO: add proper error handling 
+		assert(false);
+
+	x = READ_LE_UINT16(&buf[cffile_Time]);
 	_time_h = x >> 11;
 	_time_m = (x >> 5) & 0x3F;
 	_time_s = (x << 1) & 0x3E;
 	
-	x = EndGetI16(&buf[cffile_Date]);
+	x = READ_LE_UINT16(&buf[cffile_Date]);
 	_date_d = x & 0x1F;
 	_date_m = (x >> 5) & 0xF;
 	_date_y = (x >> 9) + 1980;
@@ -362,30 +281,26 @@ mscabd_folder::mscabd_folder(unsigned char buf[64]) {
 	const int CFFOLD_CompType = 0x06;
 	const int CFFOLD_SIZEOF = 0x08;
 	_next       = NULL;
-	_comp_type  = EndGetI16(&buf[CFFOLD_CompType]);
-	_num_blocks = EndGetI16(&buf[CFFOLD_NumBlocks]);
+	_comp_type  = READ_LE_UINT16(&buf[CFFOLD_CompType]);
+	_num_blocks = READ_LE_UINT16(&buf[CFFOLD_NumBlocks]);
 	_data.next       = NULL;
-	_merge_prev      = NULL;
-	_merge_next      = NULL;
 }
 
-int mscab_decompressor::extract(mscabd_file *file, std::string filename)
-{
+int mscab_decompressor::extract(mscabd_file *file, std::string filename) {
 	struct mscabd_folder *fol;
 	PackFile *fh;
 	
-	if (!file) return error = MSPACK_ERR_ARGS;
+	if (!file)
+		return error = MSPACK_ERR_ARGS;
 	
 	// Get the folder reference from the file.
 	fol = file->_folder;
 	
 	/* check if file can be extracted */
-	if ((!fol) || (fol->_merge_prev) ||
-		(((file->_offset + file->_length) / CAB_BLOCKMAX) > fol->_num_blocks))
-	{
+	if ((!fol) || (((file->_offset + file->_length) / CAB_BLOCKMAX) > fol->_num_blocks)) {
 		fprintf(stderr, "ERROR; file \"%s\" cannot be extracted, "
 				"cabinet set is incomplete.", file->_filename.c_str());
-		return error = MSPACK_ERR_DATAFORMAT;
+		return MSPACK_ERR_DATAFORMAT;
 	}
 
 	if (!d) {
@@ -419,7 +334,6 @@ int mscab_decompressor::extract(mscabd_file *file, std::string filename)
 		d->_data   = &fol->_data;
 		d->_offset = 0;
 		d->_block  = -1;
-		d->_i_ptr = d->_i_end = &d->_input[0];
 	}
 	
 	if (!(fh = new PackFile(filename, PackFile::OPEN_WRITE))) {
@@ -552,12 +466,8 @@ int mscabd_decompress_state::zlibDecompress(off_t offset, off_t length) {
 			return MSPACK_ERR_READ;
 		}
 
-		if (_data->cab->_block_resv && _infh->seek((off_t) _data->cab->_block_resv, PackFile::SEEKMODE_CUR)) {
-			return MSPACK_ERR_SEEK;
-		}
-
-		compressedLen = EndGetI16(&hdr[cfdata_CompressedSize]);
-		uncompressedLen = EndGetI16(&hdr[cfdata_UncompressedSize]);
+		compressedLen = READ_LE_UINT16(&hdr[cfdata_CompressedSize]);
+		uncompressedLen = READ_LE_UINT16(&hdr[cfdata_UncompressedSize]);
 
 		if (uncompressedLen > CAB_BLOCKMAX) {
 			return MSPACK_ERR_DATAFORMAT;
@@ -567,7 +477,7 @@ int mscabd_decompress_state::zlibDecompress(off_t offset, off_t length) {
 			return MSPACK_ERR_READ;
 		}
 
-		if ((cksum = EndGetI32(&hdr[cfdata_CheckSum]))) {
+		if ((cksum = READ_LE_UINT32(&hdr[cfdata_CheckSum]))) {
 			unsigned int sum2 = cabd_checksum(compressedBlock, (unsigned int) compressedLen, 0);
 			if (cabd_checksum(&hdr[4], 4, sum2) != cksum) {
 				if (!ignore_cksum) return MSPACK_ERR_CHECKSUM;

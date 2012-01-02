@@ -37,10 +37,6 @@
 #include "tools/patchex/mspack.h"
 #include "tools/patchex/packfile.h"
 
-const int cfheadext_HeaderReserved	= (0x00);
-const int cfheadext_FolderReserved	= (0x02);
-const int cfheadext_DataReserved	= (0x03);
-const int cfheadext_SIZEOF			= (0x04);
 
 const int cfdata_CheckSum			= (0x00);
 const int cfdata_CompressedSize		= (0x04);
@@ -50,9 +46,6 @@ const int cfdata_SIZEOF				= (0x08);
 const unsigned int cffoldCOMPTYPE_MASK		= (0x000f);
 const unsigned int cffoldCOMPTYPE_NONE		= (0x0000);
 const unsigned int cffoldCOMPTYPE_MSZIP		= (0x0001);
-const unsigned int cfheadPREV_CABINET		= (0x0001);
-const unsigned int cfheadNEXT_CABINET		= (0x0002);
-const unsigned int cfheadRESERVE_PRESENT	= (0x0004);
 
 #define CAB_BLOCKMAX (32768)
 #define CAB_INPUTMAX (CAB_BLOCKMAX+6144)
@@ -89,9 +82,6 @@ public:
 	struct mscabd_cabinet *_incab;
 	struct PackFile *_infh;
 
-	unsigned char *_i_ptr, *_i_end;
-	unsigned char _input[CAB_INPUTMAX];
-	
 	char *getFileBuf() { return _fileBuf; }
 	unsigned int getFileBufLen() { return _fileBufLen; }
 private:
@@ -118,17 +108,11 @@ struct mscabd_cabinet {
 	
 	off_t _base_offset;
 	unsigned int _length;
-	mscabd_cabinet *_prevcab;
-	mscabd_cabinet *_nextcab;
-	std::string _prevname, _nextname, _previnfo, _nextinfo;
 	struct mscabd_file *_files;
 	struct mscabd_folder *_folders;
-	int _block_resv;
 private:
 	unsigned short _set_id;
 	unsigned short _set_index;
-	unsigned short _header_resv;
-	int _flags;
 	off_t _blocks_off;
 	std::string _filename;
 	PackFile *_fh;
@@ -173,8 +157,6 @@ struct mscabd_folder {
 	unsigned int _num_blocks;
 	
 	mscabd_folder_data _data;
-	struct mscabd_file *_merge_prev;
-	struct mscabd_file *_merge_next;
 };
 
 struct mscabd_file {

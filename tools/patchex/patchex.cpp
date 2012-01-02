@@ -77,7 +77,6 @@ using namespace Patchex;
 int main(int argc, char *argv[]) {
 	unsigned int lang;
 	enum act action;
-	char *(*filter) (struct mscabd_file *);
 
 	action = UNKNOWN_ACTION;
 
