@@ -91,13 +91,15 @@ public:
 private:
 	int _fileBufLen;
 	char *_fileBuf;
-	z_stream_s _zStream;
+
+	int _startBlock, _endBlock;
+	off_t _inBlockStart, _inBlockEnd;
 
 	struct PackFile *_initfh;
 	Bytef *compressedBlock;
 	Bytef *decompressedBlock;
 
-	void copyBlock(int startBlock, int endBlock, off_t inBlockStart, off_t inBlockEnd, Bytef *&data_ptr);
+	void copyBlock(Bytef *&data_ptr);
 };
 
 char *file_filter(const struct mscabd_file *file);

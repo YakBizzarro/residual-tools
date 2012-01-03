@@ -300,7 +300,7 @@ int mscab_decompressor::extract(mscabd_file *file, std::string filename) {
 	if ((!fol) || (((file->_offset + file->_length) / CAB_BLOCKMAX) > fol->_num_blocks)) {
 		fprintf(stderr, "ERROR; file \"%s\" cannot be extracted, "
 				"cabinet set is incomplete.", file->_filename.c_str());
-		return MSPACK_ERR_DATAFORMAT;
+		return error = MSPACK_ERR_DATAFORMAT;
 	}
 
 	if (!d) {
@@ -335,12 +335,7 @@ int mscab_decompressor::extract(mscabd_file *file, std::string filename) {
 		d->_offset = 0;
 		d->_block  = -1;
 	}
-	
-	if (!(fh = new PackFile(filename, PackFile::OPEN_WRITE))) {
-		return error = MSPACK_ERR_OPEN;
-	}
 
-	
 	error = MSPACK_ERR_OK;
 
 	if (file->_length) {
@@ -351,9 +346,7 @@ int mscab_decompressor::extract(mscabd_file *file, std::string filename) {
 			internal_error = d->decompress(file->_offset, file->_length);
 		}
 	}
-	
-	delete fh;
-	
+
 	return error;
 }
 
@@ -385,18 +378,6 @@ mscabd_decompress_state::mscabd_decompress_state() {
 	_fileBuf	= NULL;
 	_fileBufLen	= 0;
 
-	_zStream.next_in = Z_NULL;
-	_zStream.avail_in = 0;
-	_zStream.zalloc = Z_NULL;
-	_zStream.zfree = Z_NULL;
-	_zStream.opaque = Z_NULL;
-
-	int success = inflateInit2(&_zStream, -MAX_WBITS);
-	if(success != Z_OK){
-		printf("ZLIB failed to initialize\n");
-		return;
-	}
-
 	decompressedBlock = new Bytef[CAB_BLOCKMAX];
 	compressedBlock = new Bytef[CAB_INPUTMAX];
 }
@@ -411,9 +392,8 @@ mscabd_decompress_state::~mscabd_decompress_state() {
 
 	if (compressedBlock)
 		delete[] compressedBlock;
-
-	inflateEnd(&_zStream);
 }
+
 int mscabd_decompress_state::ZipDecompress(off_t offset, off_t length) {
 	if (_fileBuf) {
 		delete[] _fileBuf;
@@ -426,12 +406,49 @@ int mscabd_decompress_state::ZipDecompress(off_t offset, off_t length) {
 	return zlibDecompress(offset, length);
 }
 
-void mscabd_decompress_state::copyBlock(int startBlock, int endBlock, off_t inBlockStart, off_t inBlockEnd, Bytef *&data_ptr) {
+//Taken from Scummvm common/zlib.cpp
+bool inflateZlibHeaderless(byte *dst, uint dstLen, const byte *src, uint srcLen, const byte *dict = NULL, uint dictLen = 0) {
+	if (!dst || !dstLen || !src || !srcLen)
+		return false;
+
+	// Initialize zlib
+	z_stream stream;
+	stream.next_in = const_cast<byte *>(src);
+	stream.avail_in = srcLen;
+	stream.next_out = dst;
+	stream.avail_out = dstLen;
+	stream.zalloc = Z_NULL;
+	stream.zfree = Z_NULL;
+	stream.opaque = Z_NULL;
+
+	// Negative MAX_WBITS tells zlib there's no zlib header
+	int err = inflateInit2(&stream, -MAX_WBITS);
+	if (err != Z_OK)
+		return false;
+
+	// Set the dictionary, if provided
+	if (dict != NULL) {
+		err = inflateSetDictionary(&stream, dict, dictLen);
+		if (err != Z_OK)
+			return false;
+	}
+
+	err = inflate(&stream, Z_SYNC_FLUSH);
+	if (err != Z_OK && err != Z_STREAM_END) {
+		inflateEnd(&stream);
+		return false;
+	}
+
+	inflateEnd(&stream);
+	return true;
+}
+
+void mscabd_decompress_state::copyBlock(Bytef *&data_ptr) {
 	off_t start, end, size;
 
-	if(startBlock <= _block && _block <= endBlock) {
-		start = (startBlock == _block) ? inBlockStart: 0;
-		end = (endBlock == _block) ? inBlockEnd : CAB_BLOCKMAX;
+	if(_startBlock <= _block && _block <= _endBlock) {
+		start = (_startBlock == _block) ? _inBlockStart: 0;
+		end = (_endBlock == _block) ? _inBlockEnd : CAB_BLOCKMAX;
 		size = end - start;
 
 		memcpy(data_ptr, decompressedBlock + start, size);
@@ -442,23 +459,21 @@ void mscabd_decompress_state::copyBlock(int startBlock, int endBlock, off_t inBl
 int mscabd_decompress_state::zlibDecompress(off_t offset, off_t length) {
 	// Ref: http://blogs.kde.org/node/3181
 	int uncompressedLen, compressedLen;
-	int success;
-	int startBlock, endBlock;
-	off_t inBlockStart, inBlockEnd;
 	unsigned char hdr[cfdata_SIZEOF];
 	unsigned int cksum;
+	bool decRes;
 
 	Bytef * ret_tmp = (Bytef *)_fileBuf;
 
-	startBlock = int(offset / CAB_BLOCKMAX);
-	inBlockStart = off_t(offset % CAB_BLOCKMAX);
-	endBlock = int((offset + length)/ CAB_BLOCKMAX);
-	inBlockEnd = off_t((offset + length) % CAB_BLOCKMAX);
+	_startBlock = int(offset / CAB_BLOCKMAX);
+	_inBlockStart = off_t(offset % CAB_BLOCKMAX);
+	_endBlock = int((offset + length)/ CAB_BLOCKMAX);
+	_inBlockEnd = off_t((offset + length) % CAB_BLOCKMAX);
 
 	//if a part of this file has been decompressed in the last block, make a copy of it
-	copyBlock(startBlock, endBlock, inBlockStart, inBlockEnd, ret_tmp);
+	copyBlock(ret_tmp);
 
-	while((_block+1) <= endBlock) {
+	while((_block + 1) <= _endBlock) {
 		// Read the CFDATA header
 		if (_infh->read(&hdr[0], cfdata_SIZEOF) != cfdata_SIZEOF) {
 			return MSPACK_ERR_READ;
@@ -488,24 +503,20 @@ int mscabd_decompress_state::zlibDecompress(off_t offset, off_t length) {
 		if (compressedBlock[0] != 'C' && compressedBlock[1] == 'K')
 			return MSPACK_ERR_READ;
 
-		_zStream.avail_in = compressedLen - 2;
-		_zStream.next_in = compressedBlock + 2;
-		_zStream.avail_out = CAB_INPUTMAX;
-		_zStream.next_out = decompressedBlock;
+		//Decompress the block. If it isn't the first, provide the previous block as dictonary
+		if (_block >= 0)
+			decRes = inflateZlibHeaderless(decompressedBlock, CAB_INPUTMAX, compressedBlock + 2, compressedLen - 2, decompressedBlock, CAB_BLOCKMAX);
+		else
+			decRes = inflateZlibHeaderless(decompressedBlock, CAB_INPUTMAX, compressedBlock + 2, compressedLen - 2);
 
-		success = inflate(&_zStream, Z_SYNC_FLUSH);
-		
-		if ((success != Z_STREAM_END) && (success != Z_OK)) {
+		if (!decRes) {
 			printf("zLib decompression error!\n");
 			return MSPACK_ERR_READ;
 		}
 
-		inflateReset(&_zStream);
-		inflateSetDictionary(&_zStream, decompressedBlock, uncompressedLen);
-
 		_block++;
 
-		copyBlock(startBlock, endBlock, inBlockStart, inBlockEnd, ret_tmp);
+		copyBlock(ret_tmp);
 	}
 	return MSPACK_ERR_OK;
 }
